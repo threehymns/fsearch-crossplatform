@@ -1,6 +1,10 @@
 #!/bin/sh
-# Release build optimized with a profile of fsearch's own searches (PGO):
-# name searches run 10-35% faster. Trains on a copy of your index with
+# Release build optimized with a profile of fsearch's own searches (PGO).
+# Upstream measures 10-35% faster name searches on Apple silicon; on an
+# i7-8565U (Linux, 273-query Chromium corpus, ABBA-interleaved plain-vs-PGO
+# over two runs) it measures geomean 1.03-1.06, i.e. no reproducible win.
+# Hardware varies, so keep PGO opt-in and measure your own machine rather
+# than assuming the profile pays. Trains on a copy of your index with
 # queries sampled from it (examples/rig.rs), then builds target/release.
 # Needs: rustup component add llvm-tools
 #
