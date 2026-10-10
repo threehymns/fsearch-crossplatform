@@ -220,9 +220,11 @@ fn entry_count(dir: i32, name: &CString) -> Option<u32> {
     (r == 0).then_some(b[1])
 }
 
-/// Linux has no single-syscall entry count; the MAYBE_EMPTY skip stays a
-/// macOS fast path until a getdents-based port lands. Returning None keeps
-/// the walk identical to the pre-merge Linux behavior (always descend).
+/// Linux has no single-syscall entry count (getdents yields names, not
+/// counts), and a count-only recheck would still pay open+getdents, which is
+/// all a full listing of a truly-empty dir costs. So the MAYBE_EMPTY skip
+/// stays macOS-only by construction; returning None keeps the walk identical
+/// to the pre-merge Linux behavior (always descend).
 #[cfg(not(target_os = "macos"))]
 fn entry_count(_dir: i32, _name: &CString) -> Option<u32> {
     None
