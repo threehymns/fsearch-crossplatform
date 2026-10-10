@@ -113,6 +113,13 @@ can outrun watch establishment and surface on the next change or restart.
 Cross-device mounts under home (like a flash drive mounted to the path `~/external`)
 are skipped by the scan.
 
+### Building
+
+Release binaries stay portable across `x86_64` machines. For a faster
+binary on the machine you build on, see `pgo.sh` (profile-guided
+optimization, portable) and the `target-cpu=native` recipe in its header
+(self-builds only — never ship native-tuned binaries to other machines).
+
 ## API
 
 JSON lines over `fsearch.sock` in the data dir, or `fsearch stdio`:
