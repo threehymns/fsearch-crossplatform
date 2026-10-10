@@ -2132,7 +2132,7 @@ fn helpers() -> &'static Helpers {
             let spawned = std::thread::Builder::new().name(format!("fsearch-help-{i}")).spawn(move || {
                 // Someone is waiting: keep off the slow cores and out of the
                 // throttled IO tiers, and never download iCloud placeholders.
-                set_qos_user_initiated();
+                crate::qos::user_initiated();
                 crate::no_materialize();
                 let mut seen = 0;
                 loop {
@@ -2377,18 +2377,6 @@ const READERS: usize = 8;
 /// files are mostly small and not in the page cache, so reads wait on the
 /// disk more than on the open() tax.
 const SCAN_READERS: usize = 8;
-
-/// Helper threads run user-initiated on macOS (someone is waiting on these
-/// reads); elsewhere QoS does not exist.
-#[cfg(target_os = "macos")]
-fn set_qos_user_initiated() {
-    unsafe {
-        libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INITIATED, 0);
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn set_qos_user_initiated() {}
 
 /// Run `f` with this thread never downloading iCloud placeholders (as the
 /// helper threads), then restore its policy.

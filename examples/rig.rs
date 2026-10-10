@@ -211,11 +211,8 @@ fn run(snap: &Path, corpus: &str, out: &str, kinds: &str) {
     let load = ms(t.elapsed());
     let pool = rayon::ThreadPoolBuilder::new()
         .start_handler(|_| {
-            // Timed like the daemon answers: user-interactive threads on macOS.
-            #[cfg(target_os = "macos")]
-            unsafe {
-                libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0);
-            }
+            // Timed like the daemon answers: user-interactive threads.
+            fsearch::qos::user_interactive();
         })
         .build()
         .unwrap();
