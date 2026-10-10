@@ -642,6 +642,11 @@ fn fuzzy_score_capped(name: &[u8], wide: Wide, q: &[u8], cap: i32) -> Option<i32
     if let Some(s) = prefix_score(name, q, cap) {
         return Some(s);
     }
+    // The NEON masked path below is aarch64-only. x86_64 deliberately keeps
+    // the memchr-driven scalar path: memchr is AVX2 there, and measured name
+    // latency on an i7-8565U (p50 0.175 ms, 1500-query Chromium set) already
+    // beats the M4 NEON absolute (0.21 ms). Revisit with profiles, not priors,
+    // if x86 ever regresses.
     #[cfg(not(target_arch = "aarch64"))]
     let _ = wide;
     #[cfg(target_arch = "aarch64")]
