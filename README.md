@@ -1,8 +1,8 @@
 # FSearch Crossplatform
 
-A cross-platform fork of [FSearch](https://github.com/noahdunnagan/fsearch), whole-disk file search for macOS and Linux. Finds
-any file by name in about a millisecond, forgives typos, and searches inside
-files with an index. Use it as a CLI (with a small daemon) or as a Rust crate.
+Whole-disk file search for macOS and Linux: names in about 0.1 ms, typo-tolerant,
+plus indexed search inside files. A CLI with a small daemon, or a Rust crate.
+A cross-platform fork of [FSearch](https://github.com/noahdunnagan/fsearch).
 
 ```bash
 # Install via Cargo
@@ -26,33 +26,47 @@ fsearch 'ext:rs grep:apply_dir'   # search inside files
 
 ## Speed
 
-M4 Max, 7.7M files and folders on disk.
+M4 Max, 8.3M files on disk, vs the previous version (76d612f). Same
+results. Medians.
 
-| | |
-|---|---|
-| find a file by name, whole disk | p50 1.3 ms |
-| search inside files | p50 9 ms |
-| a new, renamed or deleted file shows up | ~0.1 s |
-| first crawl of the disk | ~20 s, once |
-| daemon memory | 30-135 MB |
+| | before | now | |
+|---|---:|---:|---:|
+| find a file by name | 1.0 ms | 0.13 ms | 7.7× |
+| typing a whole filename, all keystrokes | 23 ms | 3.0 ms | 7.5× |
+| search inside files | 14 ms | 2.3 ms | 6.2× |
+| slowest 10% inside files (Chromium) | 38 ms | 2.3 ms | 16× |
+| CLI, launch to answer | 5.5 ms | 3.3 ms | 1.7× |
+| first run, fully searchable | 101 s | 49 s | 2.1× |
+| first run, peak memory | 1.2 GB | 0.9 GB | |
+| index on disk (Chromium) | 0.32 GB | 0.76 GB | 2.4× bigger |
+
+The index grew because each file carries a filter that lets search skip
+files without the text.
+
+On Linux (i7-8565U, Chromium tree at 509k files, same workload as
+[`demo/vs_fff.py`](demo/vs_fff.py) minus the fff half, method:
+[`demo/bench_linux.py`](demo/bench_linux.py): 0.18 ms by name, 1.3 ms
+inside files, typo still first 99.5%, ready after restart ~15 ms. The
+on-disk index is byte-identical with macOS (777 MB here against
+0.76 GB there).
 
 ## vs fff
 
-Chromium (509k files), same Mac, same queries. Video:
-[`demo/fsearch-vs-fff.mp4`](demo/fsearch-vs-fff.mp4), method:
-[`demo/vs_fff.py`](demo/vs_fff.py).
+Chromium (509k files), same Mac and queries.
+[Video](demo/fsearch-vs-fff.mp4), [method](demo/vs_fff.py).
 
 | | fsearch | [fff](https://github.com/dmtrKovalenko/fff) |
 |---|---|---|
-| find a file by name | 1.1 ms | 13.8 ms |
-| search inside files | 5.6 ms | 53 ms |
-| typo still finds the file first | 98% | 88% |
-| ready after launch | 50 ms | 2.5 s |
-| memory | 50 MB (whole disk) | 358 MB (that folder) |
+| find a file by name | 0.21 ms | 15.4 ms |
+| search inside files | 2.0 ms | 64 ms |
+| slowest 10% inside files | 3.9 ms | 482 ms |
+| typo still finds the file first | 99% | 86% |
+| ready after launch | 28 ms | 2.5 s |
+| memory | 63 MB (whole disk) | 449 MB (that folder) |
 
-On the smaller Linux kernel (96k files), name search is a tie and fsearch
-wins the rest. fff searches the contents of about 9% more files, because
-fsearch skips some file types and `build/` and `vendor/` folders.
+Linux kernel (96k files): 0.16 vs 1.8 ms by name, 1.0 vs 26 ms inside
+files. fff reads 5-10% more files: fsearch skips some file types and
+`build/` and `vendor/`.
 
 ## Queries
 
@@ -70,10 +84,10 @@ Words are fuzzy, and 5+ letter words forgive one typo (`mian.rs` finds
 
 ## Full Disk Access
 
-Started from a terminal with Full Disk Access, it indexes everything. As a
-login item (`fsearch install --login`), give `~/.local/bin/fsearch` its own
-grant in System Settings > Privacy & Security, again after each rebuild.
-Without access it skips the protected folders instead of popping a prompt.
+From a terminal with Full Disk Access it indexes everything. As a login
+item (`fsearch install --login`), grant `~/.local/bin/fsearch` access in
+System Settings > Privacy & Security, again after each rebuild. Without
+access it skips protected folders instead of prompting.
 
 ## Goals of this Fork
 
@@ -104,7 +118,16 @@ Arch's 524k default; lower-default systems will hit the wall, so to fix you
 can raise that and restart the daemon). Bursts of files in brand-new directories
 can outrun watch establishment and surface on the next change or restart.
 Cross-device mounts under home (like a flash drive mounted to the path `~/external`)
-are skipped by the scan.
+are skipped by the scan. Plan disk and memory with the index: a 556k-entry
+tree costs about 0.8 GB of index files and on the order of 0.5 GB
+steady-state daemon RSS after heavy searching.
+
+### Building
+
+Release binaries stay portable across `x86_64` machines. For a faster
+binary on the machine you build on, see `pgo.sh` (profile-guided
+optimization, portable) and the `target-cpu=native` recipe in its header
+(self-builds only — never ship native-tuned binaries to other machines).
 
 ## API
 
@@ -129,14 +152,15 @@ let engine = fsearch::Engine::start(fsearch::Options { dir: fsearch::default_dir
 let hits = engine.search(&fsearch::Query::parse("fsearch main", &home)?)?;
 ```
 
-An app and the CLI share one index: the first process owns it and the
-others follow along.
+An app and the CLI share one index: the first process owns it, the rest
+follow.
 
 ## How it works
 
-- Crawls the disk once with `getattrlistbulk`, then stays current from
-  FSEvents. A restart replays only what changed.
-- Names live in one mmap'd file, laid out folder by folder so `in:` is a
-  range. Each distinct name is scored once.
-- Content search uses a trigram index of your text files. Matches are read
-  fresh from disk, so they're never stale.
+- Crawls the disk once with `getattrlistbulk`, then follows FSEvents:
+  changes show up in about 0.1 s, and a restart replays only what changed.
+- Names live in one mmap'd file, folder by folder, so `in:` is a range. A
+  bitmap of each name's letters rules out most names before scoring.
+- Content search is a trigram index plus a per-file filter, so a search
+  only reads files likely to match. Identical files are indexed once.
+  Matches are read fresh from disk.

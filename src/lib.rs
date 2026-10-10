@@ -16,6 +16,7 @@ mod fsevents;
 mod fsevents_linux;
 pub mod index;
 pub mod live;
+pub mod qos;
 pub mod query;
 pub mod walk;
 
