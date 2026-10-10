@@ -2365,7 +2365,14 @@ pub struct GrepResult {
 /// Threads reading candidates (the searching one and helpers): file opens on
 /// this Mac stop scaling past ~4 (Endpoint Security clients tax every open;
 /// measured on hot files: 7.5 us/file at 4 threads, 9 at 8, 14 at 12).
+/// Linux has no open tax, so reads scale with in-flight depth instead:
+/// swept 2/4/8/12 on an i7-8565U over 509k files (67-pattern set, hot
+/// cache), p50 1.33/1.16/1.09/0.98 ms. 8 is the knee; 12 is within noise
+/// above it and oversubscribes small machines, so non-macOS takes 8.
+#[cfg(target_os = "macos")]
 const READERS: usize = 4;
+#[cfg(not(target_os = "macos"))]
+const READERS: usize = 8;
 /// Folders outside the index (`in:/etc`) are read with more threads: their
 /// files are mostly small and not in the page cache, so reads wait on the
 /// disk more than on the open() tax.
