@@ -43,6 +43,13 @@ results. Medians.
 The index grew because each file carries a filter that lets search skip
 files without the text.
 
+On Linux (i7-8565U, Chromium tree at 509k files, same workload as
+[`demo/vs_fff.py`](demo/vs_fff.py) minus the fff half, method:
+[`demo/bench_linux.py`](demo/bench_linux.py): 0.18 ms by name, 1.3 ms
+inside files, typo still first 99.5%, ready after restart ~15 ms. The
+on-disk index is byte-identical with macOS (777 MB here against
+0.76 GB there).
+
 ## vs fff
 
 Chromium (509k files), same Mac and queries.
@@ -111,7 +118,9 @@ Arch's 524k default; lower-default systems will hit the wall, so to fix you
 can raise that and restart the daemon). Bursts of files in brand-new directories
 can outrun watch establishment and surface on the next change or restart.
 Cross-device mounts under home (like a flash drive mounted to the path `~/external`)
-are skipped by the scan.
+are skipped by the scan. Plan disk and memory with the index: a 556k-entry
+tree costs about 0.8 GB of index files and on the order of 0.5 GB
+steady-state daemon RSS after heavy searching.
 
 ### Building
 
