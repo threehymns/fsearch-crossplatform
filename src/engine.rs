@@ -182,21 +182,22 @@ fn search_pool() -> &'static rayon::ThreadPool {
 }
 
 /// The keep-warm window: spin from `WARM_FROM` to `WARM_UNTIL` (`now_ns`).
-/// Apple-silicon-only (see `keep_warm`): parked dead code off macOS.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+/// Apple-silicon-only (see `keep_warm`): compiled out elsewhere.
+#[cfg(target_os = "macos")]
 static WARM_FROM: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "macos")]
 static WARM_UNTIL: AtomicU64 = AtomicU64::new(0);
 /// The warmer is parked until the next `keep_warm`.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg(target_os = "macos")]
 static WARM_IDLE: AtomicBool = AtomicBool::new(false);
 
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg(target_os = "macos")]
 fn now_ns() -> u64 {
     static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     EPOCH.get_or_init(Instant::now).elapsed().as_nanos() as u64
 }
 
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg(target_os = "macos")]
 fn warmer() -> &'static std::thread::Thread {
     static T: std::sync::OnceLock<std::thread::Thread> = std::sync::OnceLock::new();
     T.get_or_init(|| {
@@ -356,30 +357,23 @@ impl Engine {
     /// back up; one spinning thread keeps them up, so the next keystroke's
     /// search starts fast. The spinning stops when a search starts (the
     /// search keeps the cores busy itself) and when `d` runs out.
+    /// macOS-only: measured no-op on Linux (intel_pstate/HWP ramps in
+    /// about a millisecond), where spinning would only burn power.
+    #[cfg(target_os = "macos")]
     pub fn keep_warm(&self, d: Duration) {
-        // Apple-silicon-only: after ~20 ms idle macOS slows the cores and a
-        // search runs 3-6x slower while they ramp back up. Linux frequency
-        // scaling ramps in about a millisecond, so spinning would only burn
-        // power for no measurable win.
-        #[cfg(target_os = "macos")]
-        {
-            let w = warmer();
-            let now = now_ns();
-            // They stay up for the first few ms anyway.
-            WARM_FROM.store(now + 2_000_000, Ordering::SeqCst);
-            WARM_UNTIL.store(now + d.as_nanos() as u64, Ordering::SeqCst);
-            if WARM_IDLE.load(Ordering::SeqCst) {
-                w.unpark();
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = d;
+        let w = warmer();
+        let now = now_ns();
+        // They stay up for the first few ms anyway.
+        WARM_FROM.store(now + 2_000_000, Ordering::SeqCst);
+        WARM_UNTIL.store(now + d.as_nanos() as u64, Ordering::SeqCst);
+        if WARM_IDLE.load(Ordering::SeqCst) {
+            w.unpark();
         }
     }
 
     /// Name search.
     pub fn search(&self, q: &Query) -> Result<Vec<Found>, String> {
+        #[cfg(target_os = "macos")]
         WARM_UNTIL.store(0, Ordering::Relaxed);
         let g = self.s.live();
         let Some(live) = g.as_ref() else { return Err(indexing()) };
@@ -409,6 +403,7 @@ impl Engine {
     /// The bool says whether the content index answered (false: files were
     /// picked from the name index and read, for folders it doesn't cover).
     pub fn grep(&self, q: &Query, g: &Grep) -> Result<(GrepResult, bool), String> {
+        #[cfg(target_os = "macos")]
         WARM_UNTIL.store(0, Ordering::Relaxed);
         let home = self.s.home.as_bytes();
         let indexed = q.scope.as_ref().is_none_or(|s| content::in_scope(s, home));

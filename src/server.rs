@@ -72,6 +72,8 @@ pub fn stop(dir: &Path) -> Result<(), String> {
 
 /// How long the cores stay clocked up after an answer to a client that is
 /// still connected (typing): most gaps between keystrokes are shorter.
+/// macOS-only; the whole warmer subsystem is compiled out elsewhere.
+#[cfg(target_os = "macos")]
 const WARM: Duration = Duration::from_millis(250);
 
 fn handle(mut conn: UnixStream, engine: &Engine) {
@@ -93,6 +95,7 @@ fn handle(mut conn: UnixStream, engine: &Engine) {
         if conn.write_all(&out).is_err() {
             return;
         }
+        #[cfg(target_os = "macos")]
         if waiting(&conn) {
             engine.keep_warm(WARM);
         }
@@ -101,7 +104,9 @@ fn handle(mut conn: UnixStream, engine: &Engine) {
 
 /// The client is still connected with nothing more to ask yet: a session
 /// whose next request is a keystroke away. (One-shot clients like the CLI
-/// close their side as soon as the request is out.)
+/// close their side as soon as the request is out.) Only the macOS
+/// keep-warm call above uses it.
+#[cfg(target_os = "macos")]
 fn waiting(conn: &UnixStream) -> bool {
     let mut b = 0u8;
     let n = unsafe { libc::recv(std::os::fd::AsRawFd::as_raw_fd(conn), (&raw mut b).cast(), 1, libc::MSG_PEEK | libc::MSG_DONTWAIT) };
