@@ -18,6 +18,10 @@ pub struct Event {
     pub path: Vec<u8>,
     pub flags: u32,
     pub id: u64,
+    /// Stream number, matching upstream's `fsevents::Event`. Linux runs a
+    /// single stream, so this is always 0: `watch` never replaces the stream
+    /// the way macOS restarts do.
+    pub stream: u32,
 }
 
 /// A running watch; dropping it asks the thread to stop. The old thread
@@ -40,7 +44,7 @@ fn fail(tx: &Sender<Vec<Event>>, root: &[u8], id: u64, msg: &str) {
     eprintln!("fsearch watcher: {msg}");
     // The watch is dead: no HISTORY_DONE, so the apply loop never looks
     // live. One last root rescan reimports what it can; nothing follows.
-    let _ = tx.send(vec![Event { path: root.to_vec(), flags: MUST_SCAN_SUBDIRS | KERNEL_DROPPED, id }]);
+    let _ = tx.send(vec![Event { path: root.to_vec(), flags: MUST_SCAN_SUBDIRS | KERNEL_DROPPED, id, stream: 0 }]);
 }
 
 /// Watch `root`, the indexed home tree, with inotify through `notify`.
@@ -81,9 +85,9 @@ pub fn watch(root: &std::path::Path, since: u64, _latency: f64, tx: Sender<Vec<E
         }
         // Linux keeps no history. Tell the apply loop it is live. The id
         // matches `since` so it never advances the saved event cursor.
-        let _ = tx.send(vec![Event { path: Vec::new(), flags: HISTORY_DONE, id: since }]);
+        let _ = tx.send(vec![Event { path: Vec::new(), flags: HISTORY_DONE, id: since, stream: 0 }]);
         let mut next_id = if since == 0 { 1 } else { since + 1 };
-        let mk_dropped = |id: u64| Event { path: root_bytes.clone(), flags: MUST_SCAN_SUBDIRS | KERNEL_DROPPED, id };
+        let mk_dropped = |id: u64| Event { path: root_bytes.clone(), flags: MUST_SCAN_SUBDIRS | KERNEL_DROPPED, id, stream: 0 };
         loop {
             if stop_clone.load(Ordering::Relaxed) {
                 break;
@@ -160,7 +164,7 @@ pub fn watch(root: &std::path::Path, since: u64, _latency: f64, tx: Sender<Vec<E
                                         (path_bytes, 0)
                                     };
                                     if seen.insert((out.clone(), flags)) {
-                                        batch.push(Event { path: out, flags, id: next_id });
+                                        batch.push(Event { path: out, flags, id: next_id, stream: 0 });
                                         next_id += 1;
                                     }
                                 }
