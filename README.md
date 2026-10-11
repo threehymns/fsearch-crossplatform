@@ -43,30 +43,11 @@ results. Medians.
 The index grew because each file carries a filter that lets search skip
 files without the text.
 
-On Linux (i7-8565U, Chromium tree at 509k files, same workload as
-[`demo/vs_fff.py`](demo/vs_fff.py) minus the fff half, method:
+On Linux (i7-8565U, Chromium tree at 509k files, method:
 [`demo/bench_linux.py`](demo/bench_linux.py): 0.18 ms by name, 1.3 ms
 inside files, typo still first 99.5%, ready after restart ~15 ms. The
 on-disk index is byte-identical with macOS (777 MB here against
 0.76 GB there).
-
-## vs fff
-
-Chromium (509k files), same Mac and queries.
-[Video](demo/fsearch-vs-fff.mp4), [method](demo/vs_fff.py).
-
-| | fsearch | [fff](https://github.com/dmtrKovalenko/fff) |
-|---|---|---|
-| find a file by name | 0.21 ms | 15.4 ms |
-| search inside files | 2.0 ms | 64 ms |
-| slowest 10% inside files | 3.9 ms | 482 ms |
-| typo still finds the file first | 99% | 86% |
-| ready after launch | 28 ms | 2.5 s |
-| memory | 63 MB (whole disk) | 449 MB (that folder) |
-
-Linux kernel (96k files): 0.16 vs 1.8 ms by name, 1.0 vs 26 ms inside
-files. fff reads 5-10% more files: fsearch skips some file types and
-`build/` and `vendor/`.
 
 ## Queries
 
