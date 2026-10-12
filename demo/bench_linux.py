@@ -130,7 +130,25 @@ def fs(req):
     return (time.perf_counter() - t) * 1000, r
 
 
-while fs({"op": "status"})[1]["content_pending"]:
+
+
+def status():
+    """status, waiting out 0.2's first-run scan: until the index is ready
+    the daemon answers ok:false with an "indexing ..." error."""
+    for _ in range(3600):
+        t = time.perf_counter()
+        conn.write(json.dumps({"op": "status"}) + "\n")
+        conn.flush()
+        r = json.loads(conn.readline())
+        if r.get("ok"):
+            return (time.perf_counter() - t) * 1000, r
+        if "indexing" not in r.get("error", ""):
+            raise AssertionError(r)
+        time.sleep(1)
+    raise RuntimeError("indexing never finished")
+
+
+while status()[1]["content_pending"]:
     time.sleep(1)
 
 # Restart from stopped: time the CLI's first answer, like vs_fff.py. The CLI
@@ -149,7 +167,7 @@ print(f"daemon pid after restart: {daemon_pid}", flush=True)
 sock = socket.socket(socket.AF_UNIX)
 sock.connect(SOCK)
 conn = sock.makefile("rw")
-while fs({"op": "status"})[1]["content_pending"]:
+while status()[1]["content_pending"]:
     time.sleep(0.5)
 
 
