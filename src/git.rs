@@ -677,9 +677,11 @@ fn git_bin() -> Option<std::path::PathBuf> {
     // /usr/bin/git is the real thing.
     #[cfg(target_os = "macos")]
     let dirs = dirs.filter(|d| d != std::path::Path::new("/usr/bin"));
-    dirs.chain(["/Library/Developer/CommandLineTools/usr/bin".into(), "/Applications/Xcode.app/Contents/Developer/usr/bin".into()])
-        .map(|d: std::path::PathBuf| d.join("git"))
-        .find(|g| g.is_file())
+    // macOS-only fallbacks: these paths never exist elsewhere, so don't
+    // stat them there.
+    #[cfg(target_os = "macos")]
+    let dirs = dirs.chain(["/Library/Developer/CommandLineTools/usr/bin".into(), "/Applications/Xcode.app/Contents/Developer/usr/bin".into()]);
+    dirs.map(|d: std::path::PathBuf| d.join("git")).find(|g| g.is_file())
 }
 
 #[cfg(test)]
