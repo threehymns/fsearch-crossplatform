@@ -211,10 +211,12 @@ pub fn list_one(path: &[u8]) -> Option<Listing> {
 }
 
 // O_NOFOLLOW only checks the last component of a full path; O_NOFOLLOW_ANY
-// refuses a link anywhere in it. It needs macOS 11, so Apple Silicon only.
-#[cfg(target_arch = "aarch64")]
+// refuses a link anywhere in it. It needs macOS 11, so Apple Silicon only
+// (libc has it on Apple targets alone: a bare target_arch gate breaks
+// Linux ARM builds).
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(crate) const NOFOLLOW: i32 = libc::O_NOFOLLOW_ANY;
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 pub(crate) const NOFOLLOW: i32 = libc::O_NOFOLLOW;
 
 const OPEN_DIR: i32 = libc::O_RDONLY | libc::O_DIRECTORY | NOFOLLOW | libc::O_CLOEXEC;
