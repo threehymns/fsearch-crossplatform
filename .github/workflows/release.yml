@@ -30,6 +30,10 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: fsearch-aarch64-apple-darwin
+            # Portable baseline, not the runner's CPU (.cargo/config.toml
+            # says native): the artifact must run on every Apple Silicon
+            # Mac, as upstream's release does.
+            rustflags: -C target-cpu=apple-m1
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: fsearch-x86_64-apple-darwin
@@ -40,6 +44,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Build binary
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo build --release --target ${{ matrix.target }}
       - name: Package archive
         shell: bash
