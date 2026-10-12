@@ -22,7 +22,11 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
-const MAGIC: &[u8; 8] = b"FSIDX014";
+const MAGIC: &[u8; 8] = b"FSIDX015";
+
+/// Width of the persisted kind bits (see `Index::kind`): 5, not upstream's
+/// 4, for the graft flag. Must stay in sync at the three use sites below.
+const KIND_BITS: u32 = 5;
 
 #[derive(Clone, Copy)]
 enum Sec {
@@ -344,9 +348,14 @@ impl Index {
     }
 
     /// Entry `i`'s kind: walk::KIND_* | walk::FLAG_*.
+    ///
+    /// Fork: 5 bits, not upstream's 4. The fifth carries FLAG_SYNTH for the
+    /// synthetic graft prefixes above home on Linux (see
+    /// `walk::graft_home_prefix`); it is always 0 on macOS. The magic bump
+    /// (FSIDX015) keeps either side from misreading the other's saves.
     #[inline]
     pub fn kind(&self, i: usize) -> u8 {
-        self.bits(Sec::Kind, 4).get(i) as u8
+        self.bits(Sec::Kind, KIND_BITS).get(i) as u8
     }
 
     // Entry i's size as `enc_size` has it (see `size_of`), and mtime.
@@ -832,7 +841,7 @@ impl Index {
         put(&mut m[at(Sec::NameOff)], as_bytes(&soff.iter().enumerate().map(|(k, &o)| (o - soff[k >> shift << shift]) as u16).collect::<Vec<_>>()));
         put(&mut m[at(Sec::Names)], &stored);
         put_bits(&mut m[at(Sec::EntName)], ent_name.iter().copied(), width(u));
-        put_bits(&mut m[at(Sec::Kind)], kind[..n].iter().map(|&k| k as u32), 4);
+        put_bits(&mut m[at(Sec::Kind)], kind[..n].iter().map(|&k| k as u32), KIND_BITS);
         let mut bits = vec![0u64; n.div_ceil(64)];
         for s in std::iter::once(0).chain(starts.iter().map(|&k| dir_start[k as usize])) {
             bits[s as usize / 64] |= 1 << (s % 64);
@@ -1074,7 +1083,7 @@ fn section_lens(n: usize, d: usize, u: usize, names_len: usize, blocks: usize, s
     let runs = |len: usize, words: usize| (len.div_ceil(64) + 1 + words) * 8 + 8;
     let z = n.div_ceil(ZONE) * std::mem::size_of::<Zone>();
     [
-        u.div_ceil(64) * NBITMAPS * 8, (u + 1).div_ceil(1 << shift) * 4, (u + 1) * 2, names_len, bits_len(n, width(u)), bits_len(n, 4),
+        u.div_ceil(64) * NBITMAPS * 8, (u + 1).div_ceil(1 << shift) * 4, (u + 1) * 2, names_len, bits_len(n, width(u)), bits_len(n, KIND_BITS),
         n64 * 8, n64 * 4, bits_len(blocks, width(d)), runs(n, w[0]), runs(n, w[1]), runs(d, w[2]), runs(d, w[3]), runs(d, w[4]),
         runs(d, w[5]), d, runs(d, w[6]), bits_len(u + 1, width(n + 1)), bits_len(n, width(n)), u, u * 4, u, 256 * 16, z,
     ]
