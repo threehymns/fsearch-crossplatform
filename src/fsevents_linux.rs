@@ -252,7 +252,7 @@ pub fn get_current_event_id() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64
 }
 
-pub use self::get_current_event_id as FSEventsGetCurrentEventId;
+pub use self::get_current_event_id as current_id;
 
 #[cfg(test)]
 mod tests {

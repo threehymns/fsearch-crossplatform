@@ -193,7 +193,9 @@ static WARM_UNTIL: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_os = "macos")]
 static WARM_IDLE: AtomicBool = AtomicBool::new(false);
 
-#[cfg(target_os = "macos")]
+/// Monotonic nanoseconds for search pacing and allocator draining.
+/// (Identical on both platforms; upstream gates it to macOS only because
+/// that is all upstream builds.)
 fn now_ns() -> u64 {
     static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     EPOCH.get_or_init(Instant::now).elapsed().as_nanos() as u64
@@ -313,6 +315,8 @@ impl Engine {
         // mapped, so a restart's first answer needn't wait (`fsearch <query>`
         // with no daemon running: 33 -> 27 ms on the M6).
         spawn("fsearch-apply", move || {
+            #[cfg(target_os = "linux")]
+            let had_base = loading.is_some();
             let (live, replay) = match loading {
                 Some(b) => {
                     log(format!("loaded {} entries, replaying events since {}", b.n, b.event_id));
@@ -338,6 +342,14 @@ impl Engine {
             s.early.lock().unwrap().clear();
             *s.loading.0.lock().unwrap() = false;
             s.loading.1.notify_all();
+            // A loaded index may have missed everything that changed while
+            // down, and Linux keeps no event history: relist by mtime once
+            // at startup. Fresh builds need no catch-up; afterwards the
+            // watcher keeps the index live.
+            #[cfg(target_os = "linux")]
+            if had_base {
+                relist_changed(&s, "startup", MUST_SCAN_SUBDIRS);
+            }
             if let Some(from) = replay {
                 // (A save from before event ids were stamped: from now.)
                 s.watch(if owner && from == 0 { events::current_id() } else { from });
@@ -574,15 +586,21 @@ impl Shared {
         self.content_ready.load(Ordering::Acquire) || scope.is_some_and(|s| self.content_early.lock().unwrap().iter().any(|f| under(s, f)))
     }
 
-    /// (Re)start the FSEvents stream from `since`, replacing any old one.
+    /// (Re)start the event stream from `since`, replacing any old one.
+    /// macOS watches `/`; Linux watches the indexed home tree and keeps
+    /// no history (see `fsevents_linux`).
     fn watch(&self, since: u64) {
         self.replaying.store(true, Ordering::Relaxed);
         self.since.store(since, Ordering::Relaxed);
+        #[cfg(target_os = "macos")]
         let n = self.streams.fetch_add(1, Ordering::Relaxed) + 1;
         // 10 ms: a change shows in ~12 ms (fseventsd's own delay); at 0.1 s,
         // one made within 0.1 s of another (save then rename) took ~100 ms.
         // `Pace` keeps a busy folder from being listed that often.
+        #[cfg(target_os = "macos")]
         let new = events::watch(since, 0.01, self.wake.clone(), n);
+        #[cfg(target_os = "linux")]
+        let new = events::watch(Path::new(&self.home), since, 0.01, self.wake.clone());
         *self.stream.lock().unwrap() = Some(new);
     }
 
@@ -944,10 +962,21 @@ fn build_batches(shared: &Shared, pool: &rayon::ThreadPool, todo: &content::Docs
     }
 }
 
-fn full_build(shared: &Shared, event_id: u64) -> Index {
+fn full_build(shared: &Shared, _event_id: u64) -> Index {
     let t = Instant::now();
     let started = crate::query::now_secs();
+    #[cfg(target_os = "macos")]
     let ls = walk::scan_disk(SCAN_THREADS);
+    // Linux indexes home, grafted under synthetic prefixes so unscanned
+    // ancestors stay out of results (see `graft_home_prefix`).
+    #[cfg(target_os = "linux")]
+    let ls = walk::graft_home_prefix(walk::scan(shared.home.as_bytes(), SCAN_THREADS), shared.home.as_bytes());
+    // Linux ids order one run only, never a replay cursor: saves keep 0
+    // and restarts recover through `synced_at` relists.
+    #[cfg(target_os = "linux")]
+    let event_id = 0;
+    #[cfg(not(target_os = "linux"))]
+    let event_id = _event_id;
     let idx = Index::build(ls, event_id, started, shared.home.as_bytes());
     let path = shared.dir.join("index.bin");
     if let Err(e) = idx.save(&path) {
