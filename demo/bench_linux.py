@@ -133,7 +133,7 @@ def fs(req):
 
 
 def status():
-    """status, waiting out 0.2's first-run scan: until the index is ready
+    """status, waiting out the first-run scan: until the index is ready
     the daemon answers ok:false with an "indexing ..." error."""
     for _ in range(3600):
         t = time.perf_counter()
