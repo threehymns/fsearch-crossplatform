@@ -3498,10 +3498,10 @@ fn readers_more() -> usize {
     })
 }
 /// Off macOS, a fixed count: Linux has no open tax, so reads scale with
-/// in-flight depth instead. Swept 2/4/8/12 on an i7-8565U over 509k files
-/// (67-pattern set, hot cache), p50 1.33/1.16/1.09/0.98 ms. 8 is the knee;
-/// 12 is within noise above it and oversubscribes small machines.
-/// (Carried from the pre-0.2 tree; re-measure against 0.2's read path.)
+/// in-flight depth instead. Swept 4/6/8 interleaved (ABCCBA) on an
+/// i7-8565U over 509k files against the 0.2 read path: per-arm medians
+/// within run-to-run cache drift (name-only queries drifted 3x across
+/// the session), 8 the most stable pair. Kept at 8.
 #[cfg(not(target_os = "macos"))]
 fn readers_more() -> usize {
     8
