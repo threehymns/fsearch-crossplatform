@@ -7,7 +7,7 @@
 //!
 //!   churn <work dir> <index.bin> <corpus> <days> [rounds a day]
 //!
-//! <work dir> must not exist; it gets home/ (an APFS clone of <corpus>) and
+//! <work dir> must not exist; it gets home/ (a clone of <corpus>) and
 //! content/. A day: EDITS files edited (a line appended), CREATES new files
 //! and as many deleted, LOGS notes files appended to every round (as a
 //! transcript or log grows), and every 7th day a checkout editing CHECKOUT
@@ -58,7 +58,14 @@ fn main() {
     assert!(!work.exists(), "{} exists", work.display());
     std::fs::create_dir_all(&work).unwrap();
     let home = work.join("home");
-    assert!(std::process::Command::new("cp").arg("-cR").arg(&a[2]).arg(&home).status().unwrap().success());
+    // A filesystem clone where supported (macOS), reflink-or-copy
+    // elsewhere: the days mutate home/ freely either way.
+    let mut cp = std::process::Command::new("cp");
+    #[cfg(target_os = "macos")]
+    cp.arg("-cR");
+    #[cfg(not(target_os = "macos"))]
+    cp.args(["-a", "--reflink=auto"]);
+    assert!(cp.arg(&a[2]).arg(&home).status().unwrap().success());
     std::fs::create_dir_all(home.join("notes")).unwrap();
     let hb = home.as_os_str().as_bytes().to_vec();
     let mut live = Live::new(Index::load(a[1].as_ref()).expect("index"));
