@@ -51,8 +51,8 @@ bit-packed name arrays read in place. Grep's first page reads a few more
 files for it, and the deeper typo search costs a little on names.
 
 On Linux (i7-8565U, Chromium tree at 509k files, method:
-[`demo/bench_linux.py`](demo/bench_linux.py): 0.18 ms by name, 1.3 ms
-inside files, typo still first 99.5%, ready after restart ~15 ms. The
+[`demo/bench_linux.py`](demo/bench_linux.py), hot cache): 0.3 ms by name,
+~5 ms inside files, typo still first 99.5%, ready after restart ~20 ms. The
 on-disk index is byte-identical with macOS (777 MB here against
 0.76 GB there).
 
