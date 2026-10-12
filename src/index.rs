@@ -22,11 +22,17 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
-const MAGIC: &[u8; 8] = b"FSIDX015";
+const MAGIC: &[u8; 8] = b"FSIDX014";
 
-/// Width of the persisted kind bits (see `Index::kind`): 5, not upstream's
-/// 4, for the graft flag. Must stay in sync at the three use sites below.
-const KIND_BITS: u32 = 5;
+/// Width of the persisted kind bits (see `Index::kind`). Upstream's 4 on
+/// macOS, so fork indexes stay byte-identical and drop-in compatible
+/// there; 5 on Linux, where the fifth carries FLAG_SYNTH for the
+/// synthetic graft prefixes above home (see `walk::graft_home_prefix`),
+/// which macOS whole-disk scans never create. Must stay in sync at the
+/// three use sites below. Cross-platform saves are never shared (each
+/// platform indexes a different tree into a different data dir), so the
+/// per-platform width never mixes.
+const KIND_BITS: u32 = if cfg!(target_os = "linux") { 5 } else { 4 };
 
 #[derive(Clone, Copy)]
 enum Sec {
@@ -349,10 +355,9 @@ impl Index {
 
     /// Entry `i`'s kind: walk::KIND_* | walk::FLAG_*.
     ///
-    /// Fork: 5 bits, not upstream's 4. The fifth carries FLAG_SYNTH for the
-    /// synthetic graft prefixes above home on Linux (see
-    /// `walk::graft_home_prefix`); it is always 0 on macOS. The magic bump
-    /// (FSIDX015) keeps either side from misreading the other's saves.
+    /// Fork: on Linux the fifth bit carries FLAG_SYNTH for synthetic graft
+    /// prefixes above home (see `walk::graft_home_prefix`); always 0 on
+    /// macOS, where the persisted width matches upstream exactly.
     #[inline]
     pub fn kind(&self, i: usize) -> u8 {
         self.bits(Sec::Kind, KIND_BITS).get(i) as u8
