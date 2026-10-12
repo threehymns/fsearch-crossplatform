@@ -315,10 +315,30 @@ fn mb(b: u64) -> f64 {
 }
 
 /// (phys_footprint, lifetime max) of this process.
+#[cfg(target_os = "macos")]
 fn footprint() -> (u64, u64) {
     let mut ri: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
     unsafe { libc::proc_pid_rusage(libc::getpid(), libc::RUSAGE_INFO_V4, (&raw mut ri).cast()) };
     (ri.ri_phys_footprint, ri.ri_lifetime_max_phys_footprint)
+}
+
+/// Same from /proc on Linux: VmRSS now, VmHWM for the lifetime peak.
+#[cfg(target_os = "linux")]
+fn footprint() -> (u64, u64) {
+    let s = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let get = |k: &str| {
+        s.lines()
+            .find_map(|l| {
+                let (key, rest) = l.split_once(':')?;
+                if key.trim() != k {
+                    return None;
+                }
+                rest.split_whitespace().next()?.parse::<u64>().ok()
+            })
+            .unwrap_or(0)
+            * 1024
+    };
+    (get("VmRSS"), get("VmHWM"))
 }
 
 fn lifetime_peak() -> u64 {
