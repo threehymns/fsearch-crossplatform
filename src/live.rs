@@ -103,6 +103,12 @@ pub enum Applied {
 impl Live {
     pub fn new(base: Index) -> Live {
         base.prefault();
+        Live::lazy(base)
+    }
+
+    /// `new` without faulting the index in first: a restart's first search
+    /// runs on it as mapped, and `Index::prefault` follows.
+    pub fn lazy(base: Index) -> Live {
         let words = base.n.div_ceil(64);
         let event_id = base.event_id;
         let synced_at = base.synced_at;
@@ -163,7 +169,7 @@ impl Live {
     fn kill_subtree(&mut self, e: u32) {
         self.kill(e);
         if let Some(d) = self.base.dir_of(e) {
-            let (a, b) = (self.base.dir_start()[d as usize], self.base.dir_end()[d as usize]);
+            let (a, b) = (self.base.dir_start(d as usize), self.base.dir_end(d as usize));
             for i in a..b {
                 self.kill(i);
             }
@@ -235,7 +241,7 @@ impl Live {
             }
             let name = &listing.names[r.name_off as usize..][..r.name_len as usize];
             let was_dir = match cur.get(name) {
-                Some(Some(c)) => self.base.kind()[*c as usize] & 3 == KIND_DIR,
+                Some(Some(c)) => self.base.kind(*c as usize) & 3 == KIND_DIR,
                 Some(None) => self.over.get(&join(&f.path, name)).is_some_and(|o| o.kind & 3 == KIND_DIR),
                 None => false,
             };
@@ -305,12 +311,12 @@ impl Live {
                 }
                 Some(Some(c)) => {
                     let c = c as usize;
-                    let was_kind = self.base.kind()[c];
+                    let was_kind = self.base.kind(c);
                     if was_kind & 3 != now.kind & 3 {
                         self.kill_subtree(c as u32);
                         let scan = f.scans.remove(&child);
                         self.add_new(child, now, scan);
-                    } else if now.kind & 3 != KIND_DIR && (self.base.size_raw()[c] != enc_size(now.size) || self.base.mtime()[c] != now.mtime) {
+                    } else if now.kind & 3 != KIND_DIR && (self.base.size_raw(c) != enc_size(now.size) || self.base.mtime(c) != now.mtime) {
                         self.kill(c as u32);
                         self.put(child, now);
                     }
@@ -331,7 +337,7 @@ impl Live {
             let child = join(&p, &name);
             match c {
                 Some(c) => {
-                    if self.base.kind()[c as usize] & 3 == KIND_DIR {
+                    if self.base.kind(c as usize) & 3 == KIND_DIR {
                         self.trees.push(child);
                     }
                     self.kill_subtree(c)
@@ -371,16 +377,16 @@ impl Live {
     pub fn changed_dirs(&self, since: u32) -> Vec<Vec<u8>> {
         use rayon::prelude::*;
         let idx = &self.base;
-        let de = idx.dir_entry();
+        let de = idx.dir_entries();
         let check = |p: &[u8]| !walk::blocked(p) && lstat(p).is_some_and(|o| o.mtime >= since);
         let pool = stat_pool();
         let mut out: Vec<Vec<u8>> = pool.install(|| {
             (1..idx.d)
                 .into_par_iter()
                 .with_min_len(1024)
-                .filter(|&k| !self.is_dead(de[k]))
+                .filter(|&k| !self.is_dead(de.get(k)))
                 .map_init(Vec::new, |buf, k| {
-                    idx.path(de[k] as usize, buf);
+                    idx.path(de.get(k) as usize, buf);
                     check(buf).then(|| buf.clone())
                 })
                 .flatten()
@@ -427,10 +433,10 @@ impl Live {
                         continue;
                     }
                     let name = self.base.name(c);
-                    let k = self.base.kind()[c];
+                    let k = self.base.kind(c);
                     let sub = self.base.dir_of(c as u32);
-                    let cp = sub.map(|_| join(&path, name));
-                    push(&mut l, name, k, self.base.size_of(c), self.base.mtime()[c], cp, sub);
+                    let cp = sub.map(|_| join(&path, &name));
+                    push(&mut l, &name, k, self.base.size_of(c), self.base.mtime(c), cp, sub);
                 }
             }
             if let Some(kids) = by_parent.get(path.as_slice()) {

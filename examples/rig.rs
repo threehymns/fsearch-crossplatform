@@ -20,6 +20,10 @@ use serde_json::{Value, json};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+/// The daemon's allocator, so timings are the daemon's.
+#[global_allocator]
+static ALLOC: fsearch::alloc::Alloc = fsearch::alloc::Alloc;
+
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
     match a.first().map(String::as_str) {
@@ -49,9 +53,8 @@ impl Rng {
 
 fn gen_corpus(snap: &Path, out: &str) {
     let idx = Index::load(&snap.join("index.bin")).expect("index");
-    let ne = idx.name_ents_off();
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
-    let text = |k: usize| String::from_utf8_lossy(idx.uname(k as u32)).into_owned();
+    let text = |k: usize| String::from_utf8_lossy(&idx.uname(k as u32)).into_owned();
     let mut names: Vec<(String, String)> = Vec::new();
     let mut push = |cat: &str, q: String| names.push((cat.into(), q));
 
@@ -63,7 +66,7 @@ fn gen_corpus(snap: &Path, out: &str) {
         // Words, not cache hashes: mostly letters, no long hex runs.
         let letters = n.chars().filter(char::is_ascii_alphabetic).count();
         let hexy = n.as_bytes().windows(8).any(|w| w.iter().all(u8::is_ascii_hexdigit));
-        if ne[k + 1] - ne[k] == 1 && (6..=32).contains(&n.len()) && n.is_ascii() && !n.contains(' ') && letters * 10 >= n.len() * 7 && !hexy {
+        if idx.ents(k as u32).len() == 1 && (6..=32).contains(&n.len()) && n.is_ascii() && !n.contains(' ') && letters * 10 >= n.len() * 7 && !hexy {
             targets.push((k, n));
         }
     }
@@ -89,7 +92,7 @@ fn gen_corpus(snap: &Path, out: &str) {
     while words.len() < 30 {
         let k = rng.below(idx.u);
         let stem = text(k).split('.').next().unwrap_or("").to_ascii_lowercase();
-        if ne[k + 1] - ne[k] >= 20 && (3..=10).contains(&stem.len()) && stem.chars().all(|c| c.is_ascii_lowercase()) {
+        if idx.ents(k as u32).len() >= 20 && (3..=10).contains(&stem.len()) && stem.chars().all(|c| c.is_ascii_lowercase()) {
             words.insert(stem);
         }
     }
@@ -97,9 +100,9 @@ fn gen_corpus(snap: &Path, out: &str) {
         push("word", w);
     }
     for (k, t) in targets.iter().take(30) {
-        let e = idx.name_ents()[ne[*k] as usize] as usize;
-        let dir = idx.dir_entry()[idx.parent()[e] as usize] as usize;
-        let folder = String::from_utf8_lossy(idx.name(dir)).into_owned();
+        let e = idx.ents(*k as u32).next().unwrap() as usize;
+        let dir = idx.dir_entry(idx.parent(e) as usize) as usize;
+        let folder = String::from_utf8_lossy(&idx.name(dir)).into_owned();
         let stem = t.split('.').next().unwrap_or(t);
         push("multi", format!("{} {stem}", folder.split(['.', ' ']).next().unwrap_or("")));
     }
@@ -127,7 +130,7 @@ fn gen_corpus(snap: &Path, out: &str) {
         .collect();
     while rare.len() < 40 {
         let (si, d) = docs[rng.below(docs.len())];
-        let Ok(body) = std::fs::read_to_string(std::str::from_utf8(content.segs[si].path(d)).unwrap_or("")) else { continue };
+        let Ok(body) = std::fs::read_to_string(std::str::from_utf8(&content.segs[si].path(d)).unwrap_or("")) else { continue };
         let found: Vec<&str> = ident.find_iter(&body).map(|m| m.as_str()).collect();
         if !found.is_empty() {
             rare.insert(format!("grep:{}", found[rng.below(found.len())]));
@@ -177,12 +180,17 @@ fn name_search(live: &Live, pool: &rayon::ThreadPool, q: &str, home: &str) -> u6
     h
 }
 
-/// A content search as the daemon answers it (see `Engine::grep`).
-fn grep_search(live: &Live, content: &Content, pool: &rayon::ThreadPool, q: &str, home: &str, budget: Option<Duration>) -> (u64, usize) {
+/// A content search as the daemon answers it (see `Engine::grep`); `all`:
+/// every matching line of every file. Its time, and a digest of its results.
+fn grep_search(live: &Live, content: &Content, pool: &rayon::ThreadPool, q: &str, home: &str, budget: Option<Duration>, all: bool) -> (f64, u64) {
+    let t = Instant::now();
     let mut q = Query::parse(q, home).unwrap();
     let mode = q.grep_mode;
     let mut g = Grep::new(&q.grep.take().unwrap(), mode).unwrap();
     g.budget = budget;
+    if all {
+        (q.limit, g.max_per_file) = (usize::MAX >> 1, usize::MAX >> 1);
+    }
     let indexed = q.scope.as_ref().is_none_or(|s| content::in_scope(s, home.as_bytes()));
     let r = if indexed {
         pool.install(|| content.search(&g, &q))
@@ -190,15 +198,19 @@ fn grep_search(live: &Live, content: &Content, pool: &rayon::ThreadPool, q: &str
         let paths = pool.install(|| content::scan_paths(live, q.clone_for_scan()));
         content::verify(&g, &paths, q.limit)
     };
+    let took = ms(t.elapsed());
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     for f in &r.files {
         fnv(&mut h, &f.path);
-        for (n, t) in &f.lines {
+        for ((n, t), hit) in f.lines.iter().zip(&f.hits) {
             fnv(&mut h, &n.to_le_bytes());
             fnv(&mut h, t.as_bytes());
+            for &(a, b) in &hit.ranges {
+                fnv(&mut h, &[a.to_le_bytes(), b.to_le_bytes()].concat());
+            }
         }
     }
-    (h, r.read)
+    (took, h)
 }
 
 fn run(snap: &Path, corpus: &str, out: &str, kinds: &str) {
@@ -213,6 +225,7 @@ fn run(snap: &Path, corpus: &str, out: &str, kinds: &str) {
         .start_handler(|_| {
             // Timed like the daemon answers: user-interactive threads.
             fsearch::qos::user_interactive();
+            fsearch::alloc::keep_on_this_thread();
         })
         .build()
         .unwrap();
@@ -262,13 +275,21 @@ fn run(snap: &Path, corpus: &str, out: &str, kinds: &str) {
     let greps: Vec<(String, String)> =
         corpus["grep"].as_array().unwrap().iter().map(|v| (v["cat"].as_str().unwrap().into(), v["q"].as_str().unwrap().into())).collect();
     for (_, q) in greps.iter().filter(|_| want("grep")) {
-        grep_search(&live, &content, &pool, q, &home, None);
+        grep_search(&live, &content, &pool, q, &home, None, false);
     }
     for _ in 0..if want("grep") { 5 } else { 0 } {
         for (cat, q) in &greps {
-            let t = Instant::now();
-            let (d, _) = grep_search(&live, &content, &pool, q, &home, None);
-            record("grep", cat, q, ms(t.elapsed()), d);
+            let (t, d) = grep_search(&live, &content, &pool, q, &home, None, false);
+            record("grep", cat, q, t, d);
+        }
+    }
+    // Every match of the common words and regexes (a warm-up pass first).
+    for round in 0..if want("all") { 4 } else { 0 } {
+        for (cat, q) in greps.iter().filter(|(c, _)| c == "common" || c == "regex") {
+            let (t, d) = grep_search(&live, &content, &pool, q, &home, None, true);
+            if round > 0 {
+                record("all", cat, q, t, d);
+            }
         }
     }
     res.insert("load_ms".into(), load.into());

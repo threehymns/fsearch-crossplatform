@@ -8,6 +8,7 @@
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 compile_error!("fsearch supports macOS and Linux only");
 
+pub mod alloc;
 pub mod content;
 mod engine;
 #[cfg(target_os = "macos")]
@@ -20,6 +21,6 @@ pub mod qos;
 pub mod query;
 pub mod walk;
 
-pub use content::{FileMatches, Grep, GrepResult};
+pub use content::{Case, FileMatches, Grep, GrepResult, Hit};
 pub use engine::{Engine, Found, Options, Status, default_dir, gated, has_full_disk_access, no_materialize};
 pub use query::{GrepMode, Query};
