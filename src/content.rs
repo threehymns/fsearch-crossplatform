@@ -3470,6 +3470,7 @@ pub struct GrepResult {
 /// threads join (`readers_more`), which match what was read while at most
 /// OPENING threads open files.
 const READERS: usize = 4;
+#[cfg(target_os = "macos")]
 const READERS_MORE: usize = 6;
 const OPENING: usize = 4;
 
@@ -3478,6 +3479,7 @@ const OPENING: usize = 4;
 /// mini (4 performance, 6 efficiency) ran all-matches greps 1.4-1.6x slower
 /// with the two extra threads (on efficiency cores, and the gate's waiting
 /// spins on performance ones); the M6 (2 + 4 above its 6) gains 0.85x.
+#[cfg(target_os = "macos")]
 fn readers_more() -> usize {
     static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *N.get_or_init(|| {
@@ -3494,6 +3496,15 @@ fn readers_more() -> usize {
         };
         fast.clamp(READERS, READERS_MORE)
     })
+}
+/// Off macOS, a fixed count: Linux has no open tax, so reads scale with
+/// in-flight depth instead. Swept 2/4/8/12 on an i7-8565U over 509k files
+/// (67-pattern set, hot cache), p50 1.33/1.16/1.09/0.98 ms. 8 is the knee;
+/// 12 is within noise above it and oversubscribes small machines.
+/// (Carried from the pre-0.2 tree; re-measure against 0.2's read path.)
+#[cfg(not(target_os = "macos"))]
+fn readers_more() -> usize {
+    8
 }
 /// Index searches reading candidates now (see READERS).
 static READING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -4715,7 +4726,16 @@ fn open_ahead(path: &[u8]) -> Option<std::fs::File> {
 fn open_ahead_sized(path: &[u8]) -> Option<(std::fs::File, u64)> {
     use std::os::unix::io::AsRawFd;
     let (f, len) = open_sized(path)?;
-    let ra = libc::radvisory { ra_offset: 0, ra_count: len.min(MAX_REPO_FILE + 1) as libc::c_int };
-    unsafe { libc::fcntl(f.as_raw_fd(), libc::F_RDADVISE, &ra) };
+    // F_RDADVISE (macOS) and WILLNEED (Linux) both mean "start reading this
+    // range now": advisory only, no behavior change.
+    #[cfg(target_os = "macos")]
+    {
+        let ra = libc::radvisory { ra_offset: 0, ra_count: len.min(MAX_REPO_FILE + 1) as libc::c_int };
+        unsafe { libc::fcntl(f.as_raw_fd(), libc::F_RDADVISE, &ra) };
+    }
+    #[cfg(target_os = "linux")]
+    {
+        unsafe { libc::posix_fadvise(f.as_raw_fd(), 0, len.min(MAX_REPO_FILE + 1) as i64, libc::POSIX_FADV_WILLNEED) };
+    }
     Some((f, len))
 }
