@@ -52,9 +52,10 @@ files for it, and the deeper typo search costs a little on names.
 
 On Linux (i7-8565U, Chromium tree at 509k files, method:
 [`demo/bench_linux.py`](demo/bench_linux.py), hot cache): ~0.2 ms by name,
-~2–5 ms inside files, typo still first 99.5%, ready after restart ~20 ms. The
-on-disk index is byte-identical with macOS (777 MB here against
-0.76 GB there).
+~2–5 ms inside files, typo still first 99.5%, ready after restart ~20 ms. On
+macOS the on-disk index is byte-identical with upstream (0.76 GB there); on Linux it runs a
+touch larger (777 MB here), since each entry carries a fifth kind bit for graft prefixes above
+home — the two platforms' saves are not interchangeable.
 
 ## Queries
 
@@ -80,8 +81,9 @@ smart-case, and regexes match within a line, as in ripgrep.
 Text files up to 1 MB, and up to 10 MB inside git repos, minus what git
 ignores. It leaves out lockfiles, JSON of 100 KB and up, minified or
 bundled assets, linked git worktrees (their main checkout is indexed), and
-build-output folders outside repos. To leave out more, list folders in
-`~/Library/Application Support/FSearch/content-skip.txt`, one per line
+build-output folders outside repos. To leave out more, list folders in `content-skip.txt`
+beside the index (`~/Library/Application Support/FSearch/` on macOS, `$XDG_DATA_HOME/fsearch/`
+— else `~/.local/share/fsearch/` — on Linux), one per line
 (`~` and `#` comments work). Names are always indexed, and a grep inside
 a file you name still reads it.
 
