@@ -671,14 +671,13 @@ fn glob_escape(p: &[u8]) -> Vec<u8> {
 /// an installer when the developer tools are missing.
 fn git_bin() -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
-    let mut dirs: Vec<std::path::PathBuf> = std::env::split_paths(&path).collect();
+    let dirs = std::env::split_paths(&path);
     // The macOS /usr/bin/git is a stub that pops an installer prompt when
     // the developer tools are missing; skip it there. Elsewhere
     // /usr/bin/git is the real thing.
     #[cfg(target_os = "macos")]
-    dirs.retain(|d| d != std::path::Path::new("/usr/bin"));
-    dirs.into_iter()
-        .chain(["/Library/Developer/CommandLineTools/usr/bin".into(), "/Applications/Xcode.app/Contents/Developer/usr/bin".into()])
+    let dirs = dirs.filter(|d| d != std::path::Path::new("/usr/bin"));
+    dirs.chain(["/Library/Developer/CommandLineTools/usr/bin".into(), "/Applications/Xcode.app/Contents/Developer/usr/bin".into()])
         .map(|d: std::path::PathBuf| d.join("git"))
         .find(|g| g.is_file())
 }
