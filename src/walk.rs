@@ -158,6 +158,9 @@ fn scan_with(root: &[u8], threads: usize, disk: bool) -> Vec<Listing> {
         if disk {
             yield_to_searches();
         }
+        #[cfg(target_os = "linux")]
+        list_fd(fd, &mut l, ctx.root_dev);
+        #[cfg(not(target_os = "linux"))]
         list_fd(fd, &mut l);
     }
     // A folder holding no folder (most new ones) needs no pool: its threads
@@ -174,14 +177,6 @@ fn scan_with(root: &[u8], threads: usize, disk: bool) -> Vec<Listing> {
         }
         return vec![l];
     }
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).start_handler(|_| crate::no_materialize()).build().unwrap();
-    let ctx = Ctx {
-        next_id: AtomicU32::new(1),
-        out: (0..threads + 1).map(|_| Mutex::new(Vec::new())).collect(),
-        #[cfg(target_os = "linux")]
-        root_dev,
-        disk,
-    };
     pool.scope(|s| descend(s, fd, path, l, &ctx));
     let parts: Vec<Vec<Listing>> = ctx.out.into_iter().map(|m| m.into_inner().unwrap()).collect();
     let mut out = Vec::with_capacity(parts.iter().map(Vec::len).sum());
@@ -239,6 +234,9 @@ fn finish_dir<'s>(s: &Scope<'s>, fd: i32, path: Option<Vec<u8>>, id: u32, ctx: &
     if ctx.disk {
         yield_to_searches();
     }
+    #[cfg(target_os = "linux")]
+    list_fd(fd, &mut l, ctx.root_dev);
+    #[cfg(not(target_os = "linux"))]
     list_fd(fd, &mut l);
     descend(s, fd, path, l, ctx);
 }
