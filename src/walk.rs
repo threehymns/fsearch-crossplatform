@@ -330,11 +330,26 @@ pub fn is_mount(path: &[u8]) -> bool {
     r == 0 && b[1] & (libc::DIR_MNTSTATUS_MNTPOINT | DIR_MNTSTATUS_TRIGGER) != 0
 }
 
-/// Linux port (st_dev comparison) follows in a fix(linux) commit; until
-/// then the pre-merge behavior holds (no mount flagging from live fetch).
+/// Linux has no getattrlist mount status: a folder on another device than
+/// its parent is a mount point. The scan flags mounts with the same
+/// st_dev comparison, so live fetch agrees with listings.
 #[cfg(not(target_os = "macos"))]
-pub fn is_mount(_path: &[u8]) -> bool {
-    false
+pub fn is_mount(path: &[u8]) -> bool {
+    fn dev(path: &[u8]) -> Option<u64> {
+        let c = std::ffi::CString::new(path).ok()?;
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        (unsafe { libc::lstat(c.as_ptr(), &mut st) } == 0).then_some(st.st_dev as u64)
+    }
+    let mut p = path;
+    while p.len() > 1 && p.last() == Some(&b'/') {
+        p = &p[..p.len() - 1];
+    }
+    let parent = match p.iter().rposition(|&b| b == b'/') {
+        Some(0) => &p[..1],
+        Some(i) => &p[..i],
+        None => return false,
+    };
+    matches!((dev(p), dev(parent)), (Some(a), Some(b)) if a != b)
 }
 
 fn push(l: Listing, ctx: &Ctx) {

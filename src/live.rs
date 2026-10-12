@@ -592,6 +592,9 @@ mod tests {
         let live = Live::new(Index::build(vec![Listing::default()], 0, 0, b""));
         let f = live.fetch(b"/dev", true);
         assert!(f.scans.is_empty() && f.attrs.is_some_and(|a| a.kind & FLAG_MOUNT != 0));
+        #[cfg(target_os = "macos")]
         assert!(!walk::is_mount(b"/usr/bin") && !walk::is_mount(b"/Users") && walk::is_mount(b"/System/Volumes/Data"));
+        #[cfg(target_os = "linux")]
+        assert!(!walk::is_mount(b"/usr/bin") && walk::is_mount(b"/dev") && walk::is_mount(b"/proc"));
     }
 }
