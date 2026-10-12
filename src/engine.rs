@@ -1378,6 +1378,9 @@ mod tests {
     /// gated folders compare paths to it.
     #[test]
     fn home_with_trailing_slash() {
+        // Consent-gated folders exist on macOS only; off macOS gated() is
+        // always empty.
+        #[cfg(target_os = "macos")]
         assert_eq!(gated("/h/")[0], b"/h/Desktop");
         assert_eq!(follower("home", "/h//").home(), "/h");
     }
