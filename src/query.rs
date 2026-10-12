@@ -1935,11 +1935,15 @@ pub struct Searcher<'a> {
 }
 
 impl Searcher<'_> {
-    /// Entry range to scan, from the `in:` scope.
+    /// Entry range to scan, from the `in:` scope. A graft prefix above home
+    /// was never listed, so it scopes to nothing (home itself is unflagged).
     pub fn scope_range(&self, q: &Query) -> Option<(usize, usize)> {
         let idx = &self.live.base;
         let Some(scope) = &q.scope else { return Some((1, idx.n)) };
         let e = idx.lookup(scope)?;
+        if idx.kind(e as usize) & FLAG_SYNTH != 0 {
+            return None;
+        }
         let d = idx.dir_of(e)? as usize;
         Some((idx.dir_start(d) as usize, idx.dir_end(d) as usize))
     }
@@ -3414,7 +3418,14 @@ impl Searcher<'_> {
         (0..idx.d)
             .into_par_iter()
             .with_min_len(1 << 12)
-            .map(|k| if k > 0 { DirMemo::own(names.get(en.get(de.get(k) as usize))) } else { DirMemo::default() })
+            .map(|k| {
+                // Graft prefixes above home lend no folder matches.
+                if k > 0 && idx.kind(de.get(k) as usize) & FLAG_SYNTH == 0 {
+                    DirMemo::own(names.get(en.get(de.get(k) as usize)))
+                } else {
+                    DirMemo::default()
+                }
+            })
             .collect_into_vec(&mut out);
         // Fold ancestors in, parents first. A dir's descendants are one
         // contiguous id range, so the children of huge dirs go one by one,
@@ -3483,6 +3494,10 @@ impl<'a> Scan<'a> {
         let idx = &self.live.base;
         let q = self.q;
         let k = idx.kind(i);
+        // Graft prefixes above home were never scanned.
+        if k & FLAG_SYNTH != 0 {
+            return None;
+        }
         if !q.kind_ok(k) || self.ranges.is_some_and(|r| !in_ranges(r, i as u32)) {
             return None;
         }
@@ -3622,7 +3637,13 @@ impl<'a> Scan<'a> {
         }
         let idx = &self.live.base;
         let up = self.memo_of(idx.dir_parents().get(d as usize), cache, hit);
-        let m = DirMemo::own(hit(idx.ent_names().get(idx.dir_entries().get(d as usize) as usize))).under(up);
+        // Graft prefixes above home lend no folder matches.
+        let own = if idx.kind(idx.dir_entries().get(d as usize) as usize) & FLAG_SYNTH != 0 {
+            DirMemo::default()
+        } else {
+            DirMemo::own(hit(idx.ent_names().get(idx.dir_entries().get(d as usize) as usize)))
+        };
+        let m = own.under(up);
         cache.insert(d, m);
         m
     }
