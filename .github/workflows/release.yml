@@ -1,3 +1,7 @@
+# Push a tag like v0.2.1 to build fsearch and attach it to the tag's GitHub
+# release, made here if it isn't already. Run it by hand to build an older
+# tag (`tag`), or to validate builds and packaging without publishing
+# (`dry_run`).
 name: release
 on:
   push:
@@ -5,6 +9,11 @@ on:
       - 'v*.*.*'
   workflow_dispatch:
     inputs:
+      tag:
+        description: 'Tag to build (default: current ref)'
+        required: false
+        type: string
+        default: ''
       dry_run:
         description: 'Dry run (validate builds & packaging, skip publishing)'
         required: true
@@ -15,6 +24,7 @@ permissions:
   contents: write
 
 jobs:
+  # Tests the calling ref (reusable workflow takes no ref input).
   test:
     uses: ./.github/workflows/ci.yml
 
@@ -40,6 +50,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -81,8 +93,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -97,10 +113,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
-            --generate-notes \
-            *
+          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes
+          gh release upload "$TAG" --clobber *
       - name: Dry Run Summary
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         working-directory: dist
@@ -117,6 +131,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Publish to crates.io (Dry Run)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}

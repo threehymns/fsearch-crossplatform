@@ -245,14 +245,21 @@ impl Engine {
     /// Start indexing in the background and return at once. Searches wait
     /// while a saved index loads, and answer `Err` while the very first run
     /// builds one.
-    pub fn start(opts: Options) -> Result<Engine, String> {
+    pub fn start(mut opts: Options) -> Result<Engine, String> {
         std::fs::create_dir_all(&opts.dir).map_err(|e| e.to_string())?;
+        // Home as paths are compared to it: "/h/" put nothing in content scope.
+        if opts.home.len() > 1 && opts.home.ends_with('/') {
+            opts.home = opts.home.trim_end_matches('/').to_string();
+        }
         // One writer per index: a second one would race index writes. The
         // lock dies with the process.
         let lock = std::fs::File::create(opts.dir.join("daemon.lock")).map_err(|e| e.to_string())?;
         let owner = try_lock(&lock);
         let skip: Vec<Vec<u8>> = match opts.skip {
-            Some(v) => v.into_iter().map(|p| p.as_os_str().as_bytes().to_vec()).collect(),
+            // ("/a/" is /a; an empty entry would block everything.)
+            Some(v) => v.iter().map(|p| crate::live::normalize(p.as_os_str().as_bytes())).filter(|p| !p.is_empty()).collect(),
+            #[cfg(target_os = "macos")]
+            None if has_full_disk_access() && std::env::var_os("FSEARCH_RESTRICT").is_none() => Vec::new(),
             None => {
                 // Pseudo-filesystems the walker never opens. Only consulted
                 // when a scanned path falls under one.
@@ -331,12 +338,19 @@ impl Engine {
                     s.watch(since);
                     (Live::lazy(full_build(&s, since)), None)
                 }
-                None => {
-                    // The owner is building it; follow once it exists.
-                    let b = wait_for_index(&s.dir);
-                    s.watch(b.event_id);
-                    (Live::lazy(b), None)
-                }
+                None => match wait_for_index(&s) {
+                    // The owner is building it; follow once it exists...
+                    Some(b) => {
+                        s.watch(b.event_id);
+                        (Live::lazy(b), None)
+                    }
+                    // ...or build it, if the owner quit first.
+                    None => {
+                        let since = events::current_id();
+                        s.watch(since);
+                        (Live::lazy(full_build(&s, since)), None)
+                    }
+                },
             };
             *s.live.write().unwrap() = Some(live);
             s.early.lock().unwrap().clear();
@@ -757,10 +771,15 @@ fn folder_listings(dir: &[u8]) -> Vec<Listing> {
     out
 }
 
-fn wait_for_index(dir: &Path) -> Index {
+/// The index the owner saves, or None once we took over from an owner that
+/// quit before saving one.
+fn wait_for_index(s: &Arc<Shared>) -> Option<Index> {
     loop {
-        if let Some(b) = Index::load(&dir.join("index.bin")) {
-            return b;
+        if let Some(b) = Index::load(&s.dir.join("index.bin")) {
+            return Some(b);
+        }
+        if try_upgrade(s) {
+            return Index::load(&s.dir.join("index.bin"));
         }
         std::thread::sleep(Duration::from_secs(1));
     }
@@ -770,17 +789,19 @@ fn wait_for_index(dir: &Path) -> Index {
 #[cfg(target_os = "macos")]
 const GATED_IN_HOME: &[&str] = &[
     "Desktop", "Documents", "Downloads", "Library/Mobile Documents", "Library/Containers", "Library/Group Containers",
-    "Library/CloudStorage", "Pictures/Photos Library.photoslibrary",
+    "Library/CloudStorage", "Pictures/Photos Library.photoslibrary", "Music/Music", "Movies/TV",
 ];
 
 /// Folders macOS guards with a consent prompt (or that hold other volumes).
-pub fn gated(_home: &str) -> Vec<Vec<u8>> {
+pub fn gated(home: &str) -> Vec<Vec<u8>> {
     #[cfg(target_os = "macos")]
     {
-        GATED_IN_HOME.iter().map(|d| format!("{_home}/{d}").into_bytes()).chain([b"/Volumes".to_vec()]).collect()
+        let home = home.trim_end_matches('/');
+        GATED_IN_HOME.iter().map(|d| format!("{home}/{d}").into_bytes()).chain([b"/Volumes".to_vec()]).collect()
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = home;
         Vec::new()
     }
 }
@@ -849,7 +870,9 @@ fn content_loop(shared: &Shared, rx: Receiver<Resync>) {
                 for (d, t) in std::iter::once(first).chain(rx.try_iter()) {
                     for key in d.into_iter().map(|p| (p, false)).chain(t.into_iter().map(|p| (p, true))) {
                         // Most of the disk's churn (Library, caches) is outside the indexed area.
-                        if content::in_scope(&key.0, &home) || (key.1 && home.starts_with(&key.0)) {
+                        if content::in_scope(&key.0, &home)
+                            || (key.1 && home.starts_with(&key.0) && (key.0.ends_with(b"/") || home[key.0.len()..].starts_with(b"/")))
+                        {
                             pending.entry(key.clone()).and_modify(|e| e.1 = now).or_insert((now, now));
                             changed.push(key);
                         }
@@ -979,15 +1002,16 @@ fn full_build(shared: &Shared, _event_id: u64) -> Index {
     let event_id = _event_id;
     let idx = Index::build(ls, event_id, started, shared.home.as_bytes());
     let path = shared.dir.join("index.bin");
-    if let Err(e) = idx.save(&path) {
+    let saved = idx.save(&path);
+    if let Err(e) = &saved {
         log(format!("save failed: {e}"));
     }
     note_skipped(&shared.dir);
     log(format!("indexed {} entries in {:.2?}", idx.n, t.elapsed()));
     release_memory();
     // Re-map from the file so the index is clean, evictable page cache
-    // rather than anonymous memory.
-    Index::load(&path).unwrap_or(idx)
+    // rather than anonymous memory. (After a failed save the file is older.)
+    if saved.is_ok() { Index::load(&path).unwrap_or(idx) } else { idx }
 }
 
 #[cfg(target_os = "macos")]
@@ -1021,11 +1045,13 @@ fn compact(shared: &Shared) {
     };
     let idx = Index::build(ls, eid, synced, shared.home.as_bytes());
     let path = shared.dir.join("index.bin");
-    if let Err(e) = idx.save(&path) {
+    let saved = idx.save(&path);
+    if let Err(e) = &saved {
         log(format!("save failed: {e}"));
     }
     note_skipped(&shared.dir);
-    let idx = Index::load(&path).unwrap_or(idx);
+    // (After a failed save the file is older: keep the one just built.)
+    let idx = if saved.is_ok() { Index::load(&path).unwrap_or(idx) } else { idx };
     let n = idx.n;
     *shared.live.write().unwrap() = Some(Live::new(idx));
     release_memory();
@@ -1150,7 +1176,9 @@ impl Pace {
 fn apply_loop(shared: &Arc<Shared>, rx: Receiver<Vec<events::Event>>) {
     let mut last_save = Instant::now();
     let mut last_follow = Instant::now();
-    let ours = shared.dir.as_os_str().as_bytes();
+    // As FSEvents reports it: real (a temp dir's /var is /private/var).
+    let real = shared.dir.canonicalize().unwrap_or_else(|_| shared.dir.clone());
+    let ours = real.as_os_str().as_bytes();
     // Events fseventsd dropped before we read them: (replay from, last drop).
     let mut gap: Option<(u64, Instant)> = None;
     // Replays in a row that dropped again; the third falls back to a relist.
@@ -1167,7 +1195,7 @@ fn apply_loop(shared: &Arc<Shared>, rx: Receiver<Vec<events::Event>>) {
         events.extend(rx.try_iter().flatten());
         // The owner wrote the index files: a follower picks that up now
         // rather than at its next periodic check.
-        let owner_wrote = events.iter().any(|e| e.path.starts_with(ours));
+        let owner_wrote = events.iter().any(|e| under(&e.path, ours));
         let (mut rebuild, mut root_flags, had_events) = (false, 0, !events.is_empty());
         let (mut dirs, mut max_id): (HashMap<Vec<u8>, (bool, u64)>, u64) = (HashMap::new(), 0);
         if had_events {
@@ -1323,5 +1351,42 @@ pub fn default_dir(home: &str) -> PathBuf {
             .filter(|p| p.is_absolute())
             .unwrap_or_else(|| PathBuf::from(home).join(".local/share"));
         xdg.join("fsearch")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An engine that follows (the lock is held for good, so it never
+    /// crawls the disk). walk::SKIP is set once per process, so every test
+    /// passes the same list: folders that don't exist, written oddly.
+    fn follower(name: &str, home: &str) -> Engine {
+        let d = std::env::temp_dir().join(format!("fsearch-engine-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let held = std::fs::File::create(d.join("daemon.lock")).unwrap();
+        assert!(try_lock(&held));
+        std::mem::forget(held);
+        let skip = Some(vec![PathBuf::from("/nonexistent-fsearch-skip/"), PathBuf::new()]);
+        let e = Engine::start(Options { dir: d.clone(), home: home.into(), skip }).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        e
+    }
+
+    /// Home written with a trailing slash is home: content scope and the
+    /// gated folders compare paths to it.
+    #[test]
+    fn home_with_trailing_slash() {
+        assert_eq!(gated("/h/")[0], b"/h/Desktop");
+        assert_eq!(follower("home", "/h//").home(), "/h");
+    }
+
+    /// Skip entries are folders however written: "/a/" is /a, and an empty
+    /// one blocks nothing.
+    #[test]
+    fn skip_entries() {
+        follower("skip", "/h");
+        assert!(walk::blocked(b"/nonexistent-fsearch-skip/x") && !walk::blocked(b"/usr"));
     }
 }

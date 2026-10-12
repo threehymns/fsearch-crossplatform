@@ -25,6 +25,12 @@ fsearch fsearch main              # find files by name
 fsearch 'ext:rs grep:apply_dir'   # search inside files
 ```
 
+Or skip the Rust toolchain with a release build for Apple Silicon:
+
+```
+curl -L https://github.com/noahdunnagan/fsearch/releases/latest/download/fsearch-aarch64-apple-darwin.tar.gz | tar xz && ./fsearch install
+```
+
 ## Speed
 
 M4 Mac mini, a home holding the Linux or the Chromium source tree, vs the

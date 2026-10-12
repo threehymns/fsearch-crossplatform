@@ -44,7 +44,13 @@ pub fn serve(dir: PathBuf, home: String) {
     let cx = Arc::new(Ctx { engine, git, frecency: Frecency::load(dir.join("frecency")) });
     let sock = socket_path(&dir);
     let _ = std::fs::remove_file(&sock);
-    let listener = UnixListener::bind(&sock).expect("bind socket");
+    let listener = match UnixListener::bind(&sock) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("{} {}: {e}", fsearch::query::now_secs(), sock.display());
+            return;
+        }
+    };
     for conn in listener.incoming().flatten() {
         let cx = cx.clone();
         std::thread::spawn(move || handle(conn, &cx));
@@ -923,8 +929,11 @@ fn kind_name(k: u8) -> &'static str {
 /// Connect to the daemon, starting it if it isn't running.
 pub fn connect(dir: &Path) -> std::io::Result<UnixStream> {
     let sock = socket_path(dir);
-    if let Ok(s) = UnixStream::connect(&sock) {
-        return Ok(s);
+    match UnixStream::connect(&sock) {
+        Ok(s) => return Ok(s),
+        // Too long for a socket (a long HOME): no daemon could listen there.
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => return Err(std::io::Error::new(e.kind(), format!("{}: {e}", sock.display()))),
+        Err(_) => {}
     }
     let log = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("daemon.log"))?;
     use std::os::unix::process::CommandExt;
