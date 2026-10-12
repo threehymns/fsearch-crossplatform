@@ -53,6 +53,9 @@ fn main() {
     match args.first().map(String::as_str) {
         None | Some("-h" | "--help") => eprintln!("{USAGE}"),
         Some("serve") => {
+            // A macOS libmalloc toggle: re-exec with it set (a no-op
+            // elsewhere, so only do it there).
+            #[cfg(target_os = "macos")]
             space_efficient();
             server::serve(data_dir(), home())
         }
@@ -78,6 +81,7 @@ fn main() {
 /// space-efficient mode, read only at launch, it hands them back: the daemon
 /// idles at 5-15 MB on the M6, for searches ~8% slower. So `serve` restarts
 /// itself in it.
+#[cfg(target_os = "macos")]
 fn space_efficient() {
     if std::env::var_os("MallocSpaceEfficient").is_none()
         && let Ok(exe) = std::env::current_exe()
