@@ -128,7 +128,6 @@ pub fn scan_disk(threads: usize) -> Vec<Listing> {
 
 fn scan_with(root: &[u8], threads: usize, disk: bool) -> Vec<Listing> {
     raise_fd_limit();
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).start_handler(|_| crate::no_materialize()).build().unwrap();
     let fd = if blocked(root) { -1 } else { CString::new(root).map_or(-1, |c| unsafe { libc::open(c.as_ptr(), OPEN_DIR) }) };
     #[cfg(target_os = "linux")]
     let (fd, root_dev) = if fd >= 0 {
@@ -144,22 +143,13 @@ fn scan_with(root: &[u8], threads: usize, disk: bool) -> Vec<Listing> {
     } else {
         (fd, 0)
     };
-    let ctx = Ctx {
-        next_id: AtomicU32::new(1),
-        out: (0..threads + 1).map(|_| Mutex::new(Vec::new())).collect(),
-        #[cfg(target_os = "linux")]
-        root_dev,
-        disk,
-    };
-    // Paths are only tracked when there is something to skip.
-    let path = SKIP.get().is_some_and(|v| !v.is_empty()).then(|| root.to_vec());
     let mut l = Listing { id: 0, names: Vec::new(), ents: Vec::new() };
     if fd >= 0 {
         if disk {
             yield_to_searches();
         }
         #[cfg(target_os = "linux")]
-        list_fd(fd, &mut l, ctx.root_dev);
+        list_fd(fd, &mut l, root_dev);
         #[cfg(not(target_os = "linux"))]
         list_fd(fd, &mut l);
     }
@@ -177,6 +167,17 @@ fn scan_with(root: &[u8], threads: usize, disk: bool) -> Vec<Listing> {
         }
         return vec![l];
     }
+    // Past the leaf fast path above: only scans that recurse pay for threads.
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).start_handler(|_| crate::no_materialize()).build().unwrap();
+    let ctx = Ctx {
+        next_id: AtomicU32::new(1),
+        out: (0..threads + 1).map(|_| Mutex::new(Vec::new())).collect(),
+        #[cfg(target_os = "linux")]
+        root_dev,
+        disk,
+    };
+    // Paths are only tracked when there is something to skip.
+    let path = SKIP.get().is_some_and(|v| !v.is_empty()).then(|| root.to_vec());
     pool.scope(|s| descend(s, fd, path, l, &ctx));
     let parts: Vec<Vec<Listing>> = ctx.out.into_iter().map(|m| m.into_inner().unwrap()).collect();
     let mut out = Vec::with_capacity(parts.iter().map(Vec::len).sum());
