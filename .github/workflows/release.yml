@@ -24,7 +24,8 @@ permissions:
   contents: write
 
 jobs:
-  # Tests the calling ref (reusable workflow takes no ref input).
+  # Tests the calling ref (reusable workflow takes no ref input, so a
+  # hand-built older tag still tests the current ref).
   test:
     uses: ./.github/workflows/ci.yml
 
