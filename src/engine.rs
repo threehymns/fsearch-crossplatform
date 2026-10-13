@@ -261,10 +261,16 @@ impl Engine {
             #[cfg(target_os = "macos")]
             None if has_full_disk_access() && std::env::var_os("FSEARCH_RESTRICT").is_none() => Vec::new(),
             None => {
-                // Pseudo-filesystems the walker never opens. Only consulted
-                // when a scanned path falls under one.
                 #[cfg(target_os = "linux")]
                 {
+                    // The restriction flag keeps its upstream name and
+                    // position so a future privileged watch mode (fanotify)
+                    // slots in here: its unrestricted arm goes wide while
+                    // this restricted scope stays home-only. Until then the
+                    // default scope is already home, so both agree.
+                    let _restricted = std::env::var_os("FSEARCH_RESTRICT").is_some();
+                    // Pseudo-filesystems the walker never opens. Only consulted
+                    // when a scanned path falls under one.
                     vec![b"/proc".to_vec(), b"/sys".to_vec(), b"/dev".to_vec(), b"/run".to_vec()]
                 }
                 #[cfg(target_os = "macos")]
