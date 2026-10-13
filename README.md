@@ -25,10 +25,15 @@ fsearch fsearch main              # find files by name
 fsearch 'ext:rs grep:apply_dir'   # search inside files
 ```
 
-Or skip the Rust toolchain with a release build, Apple Silicon or x86_64 Linux:
+Or skip the Rust toolchain with a release build. Apple Silicon:
 
 ```
 curl -L https://github.com/threehymns/fsearch-crossplatform/releases/latest/download/fsearch-aarch64-apple-darwin.tar.gz | tar xz && ./fsearch install
+```
+
+x86_64 Linux:
+
+```
 curl -L https://github.com/threehymns/fsearch-crossplatform/releases/latest/download/fsearch-x86_64-unknown-linux-gnu.tar.gz | tar xz && ./fsearch install
 ```
 
