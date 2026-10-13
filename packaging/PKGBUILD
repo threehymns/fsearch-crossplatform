@@ -1,7 +1,7 @@
 # Maintainer: threehymns <https://github.com/threehymns>
 
 pkgname=fsearch-crossplatform
-pkgver=0.1.0
+pkgver=0.2.1
 pkgrel=1
 pkgdesc="A cross-platform fork of fsearch, whole-disk/home file search for macOS and Linux"
 arch=('x86_64')
