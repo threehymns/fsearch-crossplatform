@@ -4738,12 +4738,62 @@ pub fn open_regular(path: &[u8]) -> Option<std::fs::File> {
 
 /// `open_regular`, and the file's size.
 fn open_sized(path: &[u8]) -> Option<(std::fs::File, u64)> {
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::OpenOptionsExt;
-    let f =
-        std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK | crate::walk::NOFOLLOW).open(std::ffi::OsStr::from_bytes(path)).ok()?;
+    let f = open_nofollow(path)?;
     let m = f.metadata().ok()?;
     m.is_file().then_some((f, m.len()))
+}
+
+/// Open for reading, refusing a symlink in any path component: upstream's
+/// O_NOFOLLOW_ANY on Apple Silicon, openat2's RESOLVE_NO_SYMLINKS here.
+fn open_nofollow(path: &[u8]) -> Option<std::fs::File> {
+    #[cfg(target_os = "linux")]
+    match open_no_symlinks(path) {
+        OpenAttempt::Opened(f) => return Some(f),
+        OpenAttempt::Refused => return None,
+        // Kernels before 5.6 have no openat2.
+        OpenAttempt::Unsupported => {}
+    }
+    open_last_only(path)
+}
+
+/// Open for reading, refusing a symlinked last component only.
+fn open_last_only(path: &[u8]) -> Option<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK | crate::walk::NOFOLLOW).open(std::ffi::OsStr::from_bytes(path)).ok()
+}
+
+#[cfg(target_os = "linux")]
+enum OpenAttempt {
+    Opened(std::fs::File),
+    /// A link anywhere in the path (or any refusal but ENOSYS): fail
+    /// closed, do not fall back to an open that would follow it.
+    Refused,
+    /// No openat2 in this kernel: the caller falls back to last-only.
+    Unsupported,
+}
+
+/// openat2 with RESOLVE_NO_SYMLINKS. libc carries the struct and flags but
+/// no wrapper, so the raw syscall; see `open_nofollow` for the fallback.
+#[cfg(target_os = "linux")]
+fn open_no_symlinks(path: &[u8]) -> OpenAttempt {
+    use std::os::unix::io::FromRawFd;
+    let Ok(c) = std::ffi::CString::new(path) else { return OpenAttempt::Refused };
+    let mut how: libc::open_how = unsafe { std::mem::zeroed() };
+    how.flags = (libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC) as u64;
+    how.resolve = libc::RESOLVE_NO_SYMLINKS;
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            libc::AT_FDCWD as libc::c_long,
+            c.as_ptr(),
+            &how as *const libc::open_how,
+            std::mem::size_of::<libc::open_how>() as libc::c_long,
+        )
+    };
+    if fd >= 0 {
+        return OpenAttempt::Opened(unsafe { std::fs::File::from_raw_fd(fd as libc::c_int) });
+    }
+    if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOSYS) { OpenAttempt::Unsupported } else { OpenAttempt::Refused }
 }
 
 /// `open_regular` for a file about to be indexed, telling the kernel to
@@ -4785,6 +4835,28 @@ mod tests {
     fn crlf_line_ends() {
         let g = Grep::new("foo$", GrepMode::Regex).unwrap();
         assert_eq!(lines(&g, b"foo\r\nbar\r\nfoo"), [(1, "foo".to_string()), (3, "foo".to_string())]);
+    }
+
+    /// Full-path opens refuse symlinked ancestors (openat2 here, Apple's
+    /// O_NOFOLLOW_ANY on Silicon); the real file still opens.
+    #[test]
+    fn no_symlinked_ancestors() {
+        let d = std::env::temp_dir().join(format!("fsearch-nolink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let real = d.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("f.txt"), "text\n").unwrap();
+        std::os::unix::fs::symlink(&real, d.join("link")).unwrap();
+        let r = [
+            open_regular(real.join("f.txt").as_os_str().as_bytes()).is_some(),
+            open_regular(d.join("link").join("f.txt").as_os_str().as_bytes()).is_some(),
+        ];
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(r[0]);
+        // Last-component-only platforms (Intel macOS, pre-5.6 kernels)
+        // still follow ancestors.
+        #[cfg(any(target_os = "linux", target_arch = "aarch64"))]
+        assert!(!r[1]);
     }
 
     /// A case-insensitive search through the index finds what the regex
