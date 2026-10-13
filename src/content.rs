@@ -4845,6 +4845,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         let real = d.join("real");
         std::fs::create_dir_all(&real).unwrap();
+        // Real, as the index holds paths: temp dirs can sit under a link
+        // themselves (macOS $TMPDIR under /var), which full-refusal opens
+        // would reject like the planted one below.
+        let d = d.canonicalize().unwrap();
+        let real = d.join("real");
         std::fs::write(real.join("f.txt"), "text\n").unwrap();
         std::os::unix::fs::symlink(&real, d.join("link")).unwrap();
         let r = [
